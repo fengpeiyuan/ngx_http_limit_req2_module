@@ -22,7 +22,7 @@ This document describes ngx_http_limit_req2_module released on 30 Dec 2015.
 Synopsis
 ========
 
-This module is a nginx filter module, which accumulate request' latency and store data in the specified shared memory zone. Each process does this individual, and collect by one of them, then analysis.
+This module is a nginx http module, which store request' number in the specified shared memory zone. Each process share parameter 'limit_number' and control request amount individual, no lock yet.
 You can config bellow.
 ```nginx
  http {
