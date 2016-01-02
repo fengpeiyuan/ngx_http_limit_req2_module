@@ -3,7 +3,7 @@
 #include <ngx_http.h>
 
 typedef struct {
-    ngx_int_t number;
+    ngx_int_t limit_number;
     ngx_shm_zone_t *shm_zone;
     ngx_int_t buffer_pos;
     ngx_int_t processinit;
@@ -32,6 +32,7 @@ typedef struct {
 
 
 static ngx_int_t worker_processes;
+static ngx_int_t number;
 
 static void *ngx_http_limit_req2_create_loc_conf(ngx_conf_t *cf);
 static char *ngx_http_limit_req2_merge_loc_conf(ngx_conf_t*, void*, void*);
@@ -44,7 +45,7 @@ static ngx_int_t ngx_http_limit_req2_log_handler(ngx_http_request_t *r);
 
 static ngx_command_t ngx_http_limit_req2_commands[] = {
     { ngx_string("limit_number"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
 	  ngx_http_limit_req2_number,
       NGX_HTTP_LOC_CONF_OFFSET,
       0,
@@ -85,7 +86,7 @@ ngx_http_limit_req2_create_loc_conf(ngx_conf_t *cf){
     if (conf == NULL) {
         return NGX_CONF_ERROR;
     }
-    conf->number = NGX_CONF_UNSET;
+    conf->limit_number = NGX_CONF_UNSET;
     conf->buffer_pos = NGX_CONF_UNSET;
     return conf;
 }
@@ -97,7 +98,7 @@ ngx_http_limit_req2_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child){
     if (conf->shm_zone == NULL) {
         conf->shm_zone = prev->shm_zone;
     }
-    conf->number = prev->number;
+    conf->limit_number = prev->limit_number;
     conf->buffer_pos = prev->buffer_pos;
     return NGX_CONF_OK;
 }
@@ -149,16 +150,20 @@ ngx_http_limit_req2_access_handler(ngx_http_request_t *r){
             } else {
             	lrlc->buffer_pos = ctx->shm->last_used_pos;
                 ngx_http_limit_req2_shctx_buffer *sb = ctx->shm->buffer + lrlc->buffer_pos;
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##1.processnumber:%d,pos:%d\n",sb->processnumber,lrlc->buffer_pos);
                 sb->pid = getpid();
             }
             ctx->shm->last_used_pos++;
-            ctx->shm->buffer->processnumber = lrlc->number/worker_processes;
+            ctx->shm->buffer->processnumber = lrlc->limit_number/worker_processes;
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##2.processnumber:%d,shm->last_used_pos:%d\n",ctx->shm->buffer->processnumber,ctx->shm->last_used_pos);
         }
         ngx_shmtx_unlock(&((ngx_slab_pool_t*)(lrlc->lock_shm_zone->shm.addr))->mutex);
     }
 
     ngx_http_limit_req2_shctx_buffer *curr_sb = ctx->shm->buffer + lrlc->buffer_pos;
     curr_sb->processnumber--;
+
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##3.processnumber:%d,pos:%d\n",curr_sb->processnumber,lrlc->buffer_pos);
 
     if(curr_sb->processnumber<=0){
     	return NGX_HTTP_FORBIDDEN;
@@ -187,17 +192,23 @@ ngx_http_limit_req2_number(ngx_conf_t *cf, ngx_command_t *cmd, void *conf){
     ngx_http_limit_req2_ctx_t *ctx;
     ngx_http_limit_req2_lock_t *lock;
 	ngx_str_t                 *value;
-    ngx_int_t 				  *pnumber;
+    ngx_int_t 				  *limit_number;
     ngx_shm_zone_t            *shm_zone;
     ngx_shm_zone_t            *lock_shm_zone;
     ngx_core_conf_t *ccf = (ngx_core_conf_t *) ngx_get_conf(cf->cycle->conf_ctx, ngx_core_module);
     ngx_http_limit_req2_loc_conf_t *lrlc = conf;
-    pnumber = &(lrlc->number);
+    limit_number = &(lrlc->limit_number);
     worker_processes = ccf->worker_processes;
+    if(worker_processes<=0)
+    	worker_processes = 1;
     value = cf->args->elts;
-    *pnumber = ngx_atoi(value[1].data, value[1].len);
-    if (*pnumber == NGX_ERROR) {
+    *limit_number = ngx_atoi(value[1].data, value[1].len);
+    number = *limit_number;
+    if (*limit_number == NGX_ERROR) {
     	return "invalid number";
+    }
+    if(*limit_number <=0 || *limit_number <= worker_processes){
+    	return "number is too small, should be more than worker processes.";
     }
     //ctx
     ctx = ngx_pcalloc(cf->pool, sizeof(ngx_http_limit_req2_ctx_t));
@@ -224,7 +235,7 @@ ngx_http_limit_req2_number(ngx_conf_t *cf, ngx_command_t *cmd, void *conf){
        	return NGX_CONF_ERROR;
     }
     ngx_str_t lock_name = ngx_string("lock");
-    lock_shm_zone = ngx_shared_memory_add(cf, &lock_name, 16 * ngx_pagesize,&ngx_http_limit_req2_module);
+    lock_shm_zone = ngx_shared_memory_add(cf, &lock_name, 250 * ngx_pagesize,&ngx_http_limit_req2_module);
     if (lock_shm_zone == NULL) {
         return NGX_CONF_ERROR;
     }
@@ -269,6 +280,8 @@ ngx_http_limit_req2_init_shm_zone (ngx_shm_zone_t *shm_zone, void *data){
         return NGX_ERROR;
     }
     ctx->shm->last_used_pos = 0;
+//    ctx->shm->buffer->processnumber = number / worker_processes;
+//    printf("processnumber:%ld\n",ctx->shm->buffer->processnumber);
 
     ctx->shpool->data = ctx->shm;
     len = sizeof("in limit req2") + shm_zone->shm.name.len;
