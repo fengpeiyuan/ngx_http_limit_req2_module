@@ -10,6 +10,8 @@ Description
 
 **ngx_http_limit_req2_module** - another nginx limit request module which limit user total request only. 
 
+This module is a nginx http module, registerd in access and log phases, and store request' number in a specified shared memory zone. 
+Each process share the 'limit_number/worker_processes' amount and control request amount individual, no lock yet.
 
 *This module is not distributed with the Nginx source.* See [the installation instructions](#installation).
 
@@ -21,8 +23,6 @@ This document describes ngx_http_limit_req2_module released on 30 Dec 2015.
 
 Synopsis
 ========
-
-This module is a nginx http module, which store request' number in the specified shared memory zone. Each process share parameter 'limit_number' and control request amount individual, no lock yet.
 You can config bellow.
 ```nginx
  http {
