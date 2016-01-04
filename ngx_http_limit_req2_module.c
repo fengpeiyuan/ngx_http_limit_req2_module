@@ -2,7 +2,10 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-
+typedef struct {
+    ngx_int_t is_access_enter;
+    ngx_int_t is_log_enter;
+}ngx_http_limit_req2_req_ctx_t;
 
 typedef struct {
     ngx_int_t processnumber;
@@ -43,6 +46,7 @@ static ngx_int_t ngx_http_limit_req2_init_lock_shm_zone (ngx_shm_zone_t *shm_zon
 static ngx_int_t ngx_http_limit_req2_init(ngx_conf_t *cf);
 static ngx_int_t ngx_http_limit_req2_access_handler(ngx_http_request_t *r);
 static ngx_int_t ngx_http_limit_req2_log_handler(ngx_http_request_t *r);
+
 
 static ngx_command_t ngx_http_limit_req2_commands[] = {
     { ngx_string("limit_number"),
@@ -106,8 +110,6 @@ ngx_http_limit_req2_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child){
     	conf->buffer_pos = prev->buffer_pos;
     }
 
-    printf("##merge limit_number:%ld,buffer_pos:%ld,pref limit_number:%ld,buffer_pos:%ld",conf->limit_number,conf->buffer_pos,prev->limit_number,prev->buffer_pos);
-
     return NGX_CONF_OK;
 }
 
@@ -117,11 +119,13 @@ ngx_http_limit_req2_access_handler(ngx_http_request_t *r){
 	ngx_http_limit_req2_ctx_t  *ctx;
 	ngx_http_limit_req2_lock_t  *lock;
 	lrlc = ngx_http_get_module_loc_conf(r, ngx_http_limit_req2_module);
+	if(lrlc == NULL || lrlc->ctx_shm_zone == NULL ||lrlc->ctx_shm_zone->data == NULL
+			|| lrlc->lock_shm_zone == NULL || lrlc->lock_shm_zone->data == NULL){
+		ngx_log_error(NGX_LOG_CRIT, r->connection->log, 0,  "##access maybe exception happend in shm_zone,r:%p!",lrlc);
+		return NGX_DECLINED;
+	}
 	ctx = lrlc->ctx_shm_zone->data;
 	lock = lrlc->lock_shm_zone->data;
-
-	ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##0.limit_number:%ld,buffer_pos:%d,init:%d\n",lrlc->limit_number,lrlc->buffer_pos,lrlc->processinit);
-
 
     if (lrlc->processinit != 1) {
         ngx_shmtx_lock(&((ngx_slab_pool_t*)(lrlc->lock_shm_zone->shm.addr))->mutex);
@@ -165,8 +169,8 @@ ngx_http_limit_req2_access_handler(ngx_http_request_t *r){
                 ngx_http_limit_req2_shctx_buffer *sb = ctx->shm->buffer + lrlc->buffer_pos;
                 sb->pid = getpid();
                 sb->processnumber = lrlc->limit_number/worker_processes;
-                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##2.limit_number:%d,worker_processes:%d,processnumber:%d,pos:%d\n",lrlc->limit_number,worker_processes,
-                		sb->processnumber,lrlc->buffer_pos);
+                /*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##2.limit_number:%d,worker_processes:%d,processnumber:%d,pos:%d\n",lrlc->limit_number,worker_processes,
+                		sb->processnumber,lrlc->buffer_pos);*/
 
             }
             ctx->shm->last_used_pos++;
@@ -176,15 +180,32 @@ ngx_http_limit_req2_access_handler(ngx_http_request_t *r){
     }
 
     ngx_http_limit_req2_shctx_buffer *curr_sb = ctx->shm->buffer + lrlc->buffer_pos;
-    curr_sb->processnumber--;//ctx sign here
+    ngx_http_limit_req2_req_ctx_t* req_ctx = ngx_http_get_module_ctx(r, ngx_http_limit_req2_module);
 
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##3.processnumber:%d,pos:%d\n",curr_sb->processnumber,lrlc->buffer_pos);
+    /*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##access before--.processnumber:%d,pos:%d,req_ctx:%p \n",
+                		curr_sb->processnumber,lrlc->buffer_pos,req_ctx);
+	*/
+
+    if (req_ctx == NULL) {
+            req_ctx = ngx_palloc(r->pool, sizeof(ngx_http_limit_req2_req_ctx_t));
+            if (req_ctx == NULL){
+                return NGX_ERROR;
+            }
+            req_ctx->is_access_enter = 1;
+            ngx_http_set_ctx(r, req_ctx, ngx_http_limit_req2_module);
+            curr_sb->processnumber = curr_sb->processnumber-1<=0?0:curr_sb->processnumber-1;
+    }
+
+    /*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##access after--.processnumber:%d,pos:%d,req_ctx:%p,access_enter:%d,log_enter:%d \n",
+                		curr_sb->processnumber,lrlc->buffer_pos,req_ctx,req_ctx->is_access_enter,req_ctx->is_log_enter);
+
+	*/
 
     if(curr_sb->processnumber<=0){
     	return NGX_HTTP_FORBIDDEN;
     }
 
-    return NGX_OK;
+    return NGX_DECLINED;
 }
 
 
@@ -193,12 +214,51 @@ ngx_http_limit_req2_log_handler(ngx_http_request_t *r){
 	ngx_http_limit_req2_loc_conf_t *lrlc;
 	ngx_http_limit_req2_ctx_t  *ctx;
 	ngx_http_limit_req2_lock_t  *lock;
+
 	lrlc = ngx_http_get_module_loc_conf(r, ngx_http_limit_req2_module);
+	if(lrlc == NULL || lrlc->ctx_shm_zone == NULL ||lrlc->ctx_shm_zone->data == NULL
+				|| lrlc->lock_shm_zone == NULL || lrlc->lock_shm_zone->data == NULL){
+			ngx_log_error(NGX_LOG_CRIT, r->connection->log, 0,  "##log, maybe exception happend in shm_zone,r:%p!\n",lrlc);
+			return NGX_DECLINED;
+	}
 	ctx = lrlc->ctx_shm_zone->data;
 	lock = lrlc->lock_shm_zone->data;
-    ngx_http_limit_req2_shctx_buffer *curr_sb = ctx->shm->buffer + lrlc->buffer_pos;
-    curr_sb->processnumber++;
-    return NGX_OK;
+
+	ngx_http_limit_req2_shctx_buffer *curr_sb = ctx->shm->buffer + lrlc->buffer_pos;
+	ngx_http_limit_req2_req_ctx_t* req_ctx = ngx_http_get_module_ctx(r, ngx_http_limit_req2_module);
+	/*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##log before processnumber:%d,pos:%d,req_ctx:%p\n",
+								curr_sb->processnumber,lrlc->buffer_pos,req_ctx);
+	*/
+
+	if (req_ctx == NULL) {
+		 req_ctx = ngx_palloc(r->pool, sizeof(ngx_http_limit_req2_req_ctx_t));
+		 if (req_ctx == NULL){
+               return NGX_ERROR;
+		 }
+		 req_ctx->is_log_enter = 1;
+		 ngx_http_set_ctx(r, req_ctx, ngx_http_limit_req2_module);
+		 curr_sb->processnumber = curr_sb->processnumber-1>=lrlc->limit_number/worker_processes?lrlc->limit_number/worker_processes
+				 :curr_sb->processnumber+1;
+
+		ngx_log_error(NGX_LOG_CRIT, r->connection->log, 0,  "##log req_ctx is NULL\n");
+		return NGX_DECLINED;
+	}
+
+
+	if(req_ctx->is_log_enter != 1){
+		req_ctx->is_log_enter = 1;
+		ngx_http_set_ctx(r, req_ctx, ngx_http_limit_req2_module);
+		curr_sb->processnumber = curr_sb->processnumber-1>=lrlc->limit_number/worker_processes?lrlc->limit_number/worker_processes
+						 :curr_sb->processnumber+1;
+	}
+
+	/*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##log after processnumber:%d,pos:%d,req_ctx:%p,access_enter:%d,log_enter:%d\n",
+						curr_sb->processnumber,lrlc->buffer_pos,req_ctx,req_ctx->is_access_enter,req_ctx->is_log_enter);
+	*/
+
+	ngx_memzero(req_ctx,sizeof(ngx_http_limit_req2_req_ctx_t));
+
+    return NGX_DECLINED;
 }
 
 
@@ -295,8 +355,6 @@ ngx_http_limit_req2_init_shm_zone (ngx_shm_zone_t *shm_zone, void *data){
         return NGX_ERROR;
     }
     ctx->shm->last_used_pos = 0;
-//    ctx->shm->buffer->processnumber = number / worker_processes;
-//    printf("processnumber:%ld\n",ctx->shm->buffer->processnumber);
 
     ctx->shpool->data = ctx->shm;
     len = sizeof("in limit req2") + shm_zone->shm.name.len;
