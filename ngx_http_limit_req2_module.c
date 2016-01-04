@@ -198,10 +198,10 @@ ngx_http_limit_req2_access_handler(ngx_http_request_t *r){
 
     /*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##access after--.processnumber:%d,pos:%d,req_ctx:%p,access_enter:%d,log_enter:%d \n",
                 		curr_sb->processnumber,lrlc->buffer_pos,req_ctx,req_ctx->is_access_enter,req_ctx->is_log_enter);
-
 	*/
 
-    if(curr_sb->processnumber<=0){
+
+    if(curr_sb->processnumber<0){
     	return NGX_HTTP_FORBIDDEN;
     }
 
@@ -226,6 +226,7 @@ ngx_http_limit_req2_log_handler(ngx_http_request_t *r){
 
 	ngx_http_limit_req2_shctx_buffer *curr_sb = ctx->shm->buffer + lrlc->buffer_pos;
 	ngx_http_limit_req2_req_ctx_t* req_ctx = ngx_http_get_module_ctx(r, ngx_http_limit_req2_module);
+
 	/*ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,  "##log before processnumber:%d,pos:%d,req_ctx:%p\n",
 								curr_sb->processnumber,lrlc->buffer_pos,req_ctx);
 	*/
