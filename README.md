@@ -32,21 +32,18 @@ You can config bellow.
 	}
 
 ```
-Limitations
-===========
-
 
 Installation
 ============
 
 Grab the nginx source code from [nginx.org](http://nginx.org/), for example,
-the version 1.7.7, and then build the source with this module:
+the version 1.8.0, and then build the source with this module:
 
 ```bash
 
- wget 'http://nginx.org/download/nginx-1.7.7.tar.gz'
- tar -xzvf nginx-1.7.7.tar.gz
- cd nginx-1.7.7/
+ wget 'http://nginx.org/download/nginx-1.8.0.tar.gz'
+ tar -xzvf nginx-1.8.0.tar.gz
+ cd nginx-1.8.0/
 
  # Here we assume you would install you nginx under /opt/nginx/.
  ./configure --prefix=/opt/nginx \
